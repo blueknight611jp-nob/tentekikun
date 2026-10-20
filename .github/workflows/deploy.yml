@@ -36,6 +36,14 @@ jobs:
       - name: Build Flutter Web
         run: flutter build web --release --base-href "/tentekikun/"
 
+
+      # ── 追加：ビルド後の index.html のパスを強制的に修正する ──
+      - name: Fix asset paths for GitHub Pages
+        run: |
+          sed -i 's|href="manifest.json"|href="./manifest.json"|g' build/web/index.html
+          sed -i 's|src="flutter_bootstrap.js"|src="./flutter_bootstrap.js"|g' build/web/index.html
+
+
       - name: Setup Pages
         uses: actions/configure-pages@v4
 
