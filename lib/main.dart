@@ -124,7 +124,8 @@ class SelectedInfusionItem {
 enum MasterSortType {
   addedOrder('追加順'),
   nameOrder('名前順'),
-  categoryOrder('種別順');
+  categoryOrder('種別順'),
+  frequentOrder('よく使う順'); // ← 追加
 
   final String label;
   const MasterSortType(this.label);
@@ -142,15 +143,40 @@ class _TentekiHomePageState extends State<TentekiHomePage> {
   final ScrollController _masterListScrollController = ScrollController();
 
   double _weight = 60.0;
-  MasterSortType _currentSortType = MasterSortType.addedOrder;
+  MasterSortType _currentSortType = MasterSortType.frequentOrder; // 初期値を「よく使う順」にすると便利です
 
   List<InfusionMaster> _masterList = [];
   final List<SelectedInfusionItem> _selectedItems = [];
+  Map<String, int> _usageCounts = {}; // ← 使用回数保存用マップ
 
   @override
   void initState() {
     super.initState();
-    _loadMasterList();
+    _loadUsageCounts().then((_) {
+      _loadMasterList();
+    });
+  }
+
+  // 使用回数のロード
+  Future<void> _loadUsageCounts() async {
+    final prefs = await SharedPreferences.getInstance();
+    final String? jsonString = prefs.getString('master_usage_counts');
+    if (jsonString != null && jsonString.isNotEmpty) {
+      try {
+        final Map<String, dynamic> decoded = jsonDecode(jsonString);
+        setState(() {
+          _usageCounts = decoded.map((key, value) => MapEntry(key, value as int));
+        });
+      } catch (e) {
+        debugPrint('使用回数読み込みエラー: $e');
+      }
+    }
+  }
+
+  // 使用回数のセーブ
+  Future<void> _saveUsageCounts() async {
+    final prefs = await SharedPreferences.getInstance();
+    await prefs.setString('master_usage_counts', jsonEncode(_usageCounts));
   }
 
   // ローカルストレージまたはアセットからマスターリストを読み込み
@@ -214,11 +240,15 @@ class _TentekiHomePageState extends State<TentekiHomePage> {
               onPressed: () async {
                 final prefs = await SharedPreferences.getInstance();
                 await prefs.remove('custom_master_list');
+                await prefs.remove('master_usage_counts'); // 使用回数もリセット
+                setState(() {
+                  _usageCounts.clear();
+                });
                 await _loadAssetMasterList();
                 if (mounted) {
                   Navigator.pop(context);
                   ScaffoldMessenger.of(context).showSnackBar(
-                    const SnackBar(content: Text('マスターデータを初期状態にリセットしました')),
+                    const SnackBar(content: Text('マスターデータと使用頻度を初期状態にリセットしました')),
                   );
                 }
               },
@@ -242,6 +272,17 @@ class _TentekiHomePageState extends State<TentekiHomePage> {
       case MasterSortType.categoryOrder:
         list.sort((a, b) => a.category.compareTo(b.category));
         break;
+      case MasterSortType.frequentOrder: // ← よく使う順のソートロジック
+        list.sort((a, b) {
+          final countA = _usageCounts[a.id] ?? 0;
+          final countB = _usageCounts[b.id] ?? 0;
+          if (countA != countB) {
+            return countB.compareTo(countA); // 使用回数が多いものを上へ
+          }
+          // 回数が同じ場合は追加が新しいものを上へ
+          return b.createdAt.compareTo(a.createdAt);
+        });
+        break;
     }
     return list;
   }
@@ -254,7 +295,10 @@ class _TentekiHomePageState extends State<TentekiHomePage> {
           master: master,
         ),
       );
+      // カウントをインクリメントして保存
+      _usageCounts[master.id] = (_usageCounts[master.id] ?? 0) + 1;
     });
+    _saveUsageCounts();
   }
 
   void _removeItem(int index) {
@@ -377,7 +421,6 @@ class _TentekiHomePageState extends State<TentekiHomePage> {
                 if (name.isEmpty) return;
 
                 if (editTarget != null) {
-                  // 編集更新
                   setState(() {
                     final index = _masterList.indexWhere((m) => m.id == editTarget.id);
                     if (index != -1) {
@@ -401,7 +444,6 @@ class _TentekiHomePageState extends State<TentekiHomePage> {
                     }
                   });
                 } else {
-                  // 新規追加・複製
                   final newMaster = InfusionMaster(
                     id: DateTime.now().millisecondsSinceEpoch.toString(),
                     name: name,
@@ -422,7 +464,6 @@ class _TentekiHomePageState extends State<TentekiHomePage> {
 
                   setState(() {
                     _masterList.add(newMaster);
-                    _currentSortType = MasterSortType.addedOrder;
                   });
                 }
 
@@ -460,8 +501,10 @@ class _TentekiHomePageState extends State<TentekiHomePage> {
               onPressed: () async {
                 setState(() {
                   _masterList.removeWhere((m) => m.id == master.id);
+                  _usageCounts.remove(master.id);
                 });
                 await _saveMasterList();
+                await _saveUsageCounts();
                 if (mounted) {
                   Navigator.pop(context);
                   ScaffoldMessenger.of(context).showSnackBar(
@@ -757,7 +800,6 @@ class _TentekiHomePageState extends State<TentekiHomePage> {
               ),
               Row(
                 children: [
-                  // 初期化ボタン
                   InkWell(
                     onTap: _resetMasterList,
                     child: Container(
@@ -838,6 +880,7 @@ class _TentekiHomePageState extends State<TentekiHomePage> {
               itemCount: displayList.length,
               itemBuilder: (context, index) {
                 final master = displayList[index];
+                final count = _usageCounts[master.id] ?? 0; // 使用回数を表示に絡めることも可能
                 return InkWell(
                   onTap: () => _addSingleInfusion(master),
                   child: Container(
@@ -851,13 +894,12 @@ class _TentekiHomePageState extends State<TentekiHomePage> {
                         style: const TextStyle(fontWeight: FontWeight.w600, color: Colors.teal, fontSize: 13),
                       ),
                       subtitle: Text(
-                        '[${master.category}] ${master.volume}mL',
+                        '[${master.category}] ${master.volume}mL ${count > 0 ? "(使用回数: $count)" : ""}',
                         style: const TextStyle(fontSize: 10, color: Colors.black54),
                       ),
                       trailing: Row(
                         mainAxisSize: MainAxisSize.min,
                         children: [
-                          // 編集ボタン
                           IconButton(
                             icon: const Icon(Icons.edit, color: Colors.teal, size: 16),
                             padding: const EdgeInsets.all(2),
@@ -866,7 +908,6 @@ class _TentekiHomePageState extends State<TentekiHomePage> {
                             onPressed: () => _showAddCustomMasterDialog(editTarget: master),
                           ),
                           const SizedBox(width: 2),
-                          // コピーボタン
                           IconButton(
                             icon: const Icon(Icons.copy, color: Colors.teal, size: 16),
                             padding: const EdgeInsets.all(2),
@@ -875,7 +916,6 @@ class _TentekiHomePageState extends State<TentekiHomePage> {
                             onPressed: () => _showAddCustomMasterDialog(copyFrom: master),
                           ),
                           const SizedBox(width: 2),
-                          // 削除ボタン
                           IconButton(
                             icon: const Icon(Icons.delete_outline, color: Colors.red, size: 16),
                             padding: const EdgeInsets.all(2),
