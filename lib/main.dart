@@ -146,6 +146,7 @@ class _TentekiHomePageState extends State<TentekiHomePage> {
   MasterSortType _currentSortType = MasterSortType.frequentOrder;
 
   List<InfusionMaster> _masterList = [];
+  List<InfusionMaster> _displayMasterList = []; // セッション内で位置を固定するための表示用リスト
   final List<SelectedInfusionItem> _selectedItems = [];
   Map<String, int> _usageCounts = {};
 
@@ -154,6 +155,28 @@ class _TentekiHomePageState extends State<TentekiHomePage> {
     super.initState();
     _loadUsageCounts().then((_) {
       _loadMasterList();
+    });
+  }
+
+  // 表示用リストの並び替えを実行するメソッド（起動時やソート変更時のみ呼ぶ）
+  void _updateDisplayMasterList() {
+    final list = List<InfusionMaster>.from(_masterList);
+    switch (_currentSortType) {
+      case MasterSortType.addedOrder:
+        list.sort((a, b) => b.createdAt.compareTo(a.createdAt));
+        break;
+      case MasterSortType.nameOrder:
+        list.sort((a, b) => a.name.compareTo(b.name));
+        break;
+      case MasterSortType.categoryOrder:
+        list.sort((a, b) => a.category.compareTo(b.category));
+        break;
+      case MasterSortType.frequentOrder:
+        list.sort((a, b) => (_usageCounts[b.id] ?? 0).compareTo(_usageCounts[a.id] ?? 0));
+        break;
+    }
+    setState(() {
+      _displayMasterList = list;
     });
   }
 
@@ -187,6 +210,7 @@ class _TentekiHomePageState extends State<TentekiHomePage> {
         setState(() {
           _masterList = decoded.map((item) => InfusionMaster.fromJson(item)).toList();
         });
+        _updateDisplayMasterList();
         return;
       } catch (e) {
         debugPrint('マスター読み込みエラー: $e');
@@ -203,10 +227,12 @@ class _TentekiHomePageState extends State<TentekiHomePage> {
       setState(() {
         _masterList = decoded.map((item) => InfusionMaster.fromJson(item)).toList();
       });
+      _updateDisplayMasterList();
     } catch (e) {
       debugPrint('アセットからのマスター読み込みエラー: $e');
       setState(() {
         _masterList = [];
+        _displayMasterList = [];
       });
     }
   }
@@ -254,32 +280,7 @@ class _TentekiHomePageState extends State<TentekiHomePage> {
     );
   }
 
-  List<InfusionMaster> get _sortedMasterList {
-    final list = List<InfusionMaster>.from(_masterList);
-    switch (_currentSortType) {
-      case MasterSortType.addedOrder:
-        list.sort((a, b) => b.createdAt.compareTo(a.createdAt));
-        break;
-      case MasterSortType.nameOrder:
-        list.sort((a, b) => a.name.compareTo(b.name));
-        break;
-      case MasterSortType.categoryOrder:
-        list.sort((a, b) => a.category.compareTo(b.category));
-        break;
-      case MasterSortType.frequentOrder:
-        list.sort((a, b) {
-          final countA = _usageCounts[a.id] ?? 0;
-          final countB = _usageCounts[b.id] ?? 0;
-          if (countA != countB) {
-            return countB.compareTo(countA);
-          }
-          return b.createdAt.compareTo(a.createdAt);
-        });
-        break;
-    }
-    return list;
-  }
-
+  // 薬剤を追加する（使用回数は増えるが、このセッション中コントローラーの並びは変えない）
   void _addSingleInfusion(InfusionMaster master) {
     setState(() {
       _selectedItems.add(
@@ -460,6 +461,7 @@ class _TentekiHomePageState extends State<TentekiHomePage> {
                 }
 
                 await _saveMasterList();
+                _updateDisplayMasterList(); // マスター変更時は再ソート反映
 
                 if (mounted) {
                   Navigator.pop(context);
@@ -497,6 +499,7 @@ class _TentekiHomePageState extends State<TentekiHomePage> {
                 });
                 await _saveMasterList();
                 await _saveUsageCounts();
+                _updateDisplayMasterList(); // マスター削除時も再ソート反映
                 if (mounted) {
                   Navigator.pop(context);
                   ScaffoldMessenger.of(context).showSnackBar(
@@ -630,7 +633,6 @@ class _TentekiHomePageState extends State<TentekiHomePage> {
     final naPerKg = _weight > 0 ? _totalNa / _weight : 0.0;
     final kPerKg = _weight > 0 ? _totalK / _weight : 0.0;
 
-    // --- 各項目の判定と解説テキストの定義 (14パターン) ---
     Color volColor = Colors.teal;
     String? volStatus;
     String? volDesc;
@@ -683,11 +685,11 @@ class _TentekiHomePageState extends State<TentekiHomePage> {
       if (_npcNitrogenRatio > 175) {
         npcNColor = Colors.red;
         npcNStatus = '過剰 (赤字)';
-        npcDesc = 'NPC/N比が推奨上限（175）を超えています（糖質・カロリー過剰傾向）。\n\n【臨床的注意】\n熱量に対して窒素源（アミノ酸）が相対的に不足している可能性があり、十分な同化・蛋白合成が得られないことがあります。';
+        npcNDesc = 'NPC/N比が推奨上限（175）を超えています（糖質・カロリー過剰傾向）。\n\n【臨床的注意】\n熱量に対して窒素源（アミノ酸）が相対的に不足している可能性があり、十分な同化・蛋白合成が得られないことがあります。';
       } else if (_npcNitrogenRatio < 120) {
         npcNColor = Colors.blue.shade700;
         npcNStatus = '不足 (青字)';
-        npcDesc = 'NPC/N比が推奨下限（120）を下回っています（窒素源過剰傾向）。\n\n【臨床的注意】\nアミノ酸量に対してエネルギー（糖質・脂肪）が相対的に不足しており、アミノ酸が有効に利用されない可能性があります。';
+        npcNDesc = 'NPC/N比が推奨下限（120）を下回っています（窒素源過剰傾向）。\n\n【臨床的注意】\nアミノ酸量に対してエネルギー（糖質・脂肪）が相対的に不足しており、アミノ酸が有効に利用されない可能性があります。';
       }
     }
 
@@ -875,7 +877,7 @@ class _TentekiHomePageState extends State<TentekiHomePage> {
   }
 
   Widget _buildMasterSelectionWindow() {
-    final displayList = _sortedMasterList;
+    final displayList = _displayMasterList;
 
     return Column(
       crossAxisAlignment: CrossAxisAlignment.start,
@@ -929,6 +931,7 @@ class _TentekiHomePageState extends State<TentekiHomePage> {
                             setState(() {
                               _currentSortType = newValue;
                             });
+                            _updateDisplayMasterList(); // ソート変更ボタンを操作したときのみ再並び替えを実行
                           }
                         },
                         items: MasterSortType.values.map((MasterSortType type) {
@@ -1028,7 +1031,6 @@ class _TentekiHomePageState extends State<TentekiHomePage> {
     );
   }
 
-  // --- タップ可能なサマリー行ウィジェット ---
   Widget _buildRowSummaryCard(String label, String value1, String value2, Color textColor, VoidCallback? onTap) {
     final cardContent = Container(
       padding: const EdgeInsets.symmetric(horizontal: 8, vertical: 2),
